@@ -68,6 +68,7 @@ class VideoAgentApp(ctk.CTk):
             ("transcribe","🎙  转录"),
             ("analyze",   "📊  分析"),
             ("pipeline",  "⚡  一键全流程"),
+            ("agent",    "🤖  智能助手"),
         ]
         for key, label in nav_items:
             btn = ctk.CTkButton(
@@ -90,6 +91,7 @@ class VideoAgentApp(ctk.CTk):
         self._build_transcribe_page()
         self._build_analyze_page()
         self._build_pipeline_page()
+        self._build_agent_page()
 
         # 底部日志
         self.log_frame = ctk.CTkFrame(self, height=150)
@@ -506,6 +508,78 @@ class VideoAgentApp(ctk.CTk):
             self.after(0, lambda: self.pl_btn.configure(state="normal", text="🚀 开始全流程"))
             self.is_running = False
             self.pipeline_running = False
+
+    # ── 智能助手页面 ──
+    def _build_agent_page(self):
+        page = ctk.CTkFrame(self.main_frame)
+        page.grid_columnconfigure(0, weight=1)
+        page.grid_rowconfigure(1, weight=1)
+
+        # 标题
+        ctk.CTkLabel(page, text="🤖 智能助手", font=("", 20, "bold")).pack(anchor="w", padx=15, pady=(15, 5))
+        ctk.CTkLabel(page, text="用自然语言告诉我你想做什么，我会自动规划并执行",
+                     font=("", 12), text_color="gray").pack(anchor="w", padx=15)
+
+        # 对话区
+        self.ag_chat = ctk.CTkTextbox(page, wrap="word", font=("", 12))
+        self.ag_chat.pack(fill="both", expand=True, padx=15, pady=10)
+        self.ag_chat.insert("end", "🤖 你好！我是视频分析助手，可以帮你：\n")
+        self.ag_chat.insert("end", "  • 下载视频（B站/抖音/Twitter/SOOP）\n")
+        self.ag_chat.insert("end", "  • 转录视频为文字\n")
+        self.ag_chat.insert("end", "  • 分析文案内容（总结/提取/质量评估）\n")
+        self.ag_chat.insert("end", "  • 组合完成复杂任务\n\n")
+        self.ag_chat.insert("end", "试试说：「帮我下载这个抖音视频并分析它的内容」\n\n")
+        self.ag_chat.configure(state="disabled")
+
+        # 输入区
+        input_frame = ctk.CTkFrame(page)
+        input_frame.pack(fill="x", padx=15, pady=(0, 15))
+        input_frame.grid_columnconfigure(0, weight=1)
+
+        self.ag_input = ctk.CTkEntry(input_frame, placeholder_text="输入你的目标...", font=("", 13))
+        self.ag_input.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        self.ag_input.bind("<Return>", lambda e: self._start_agent())
+
+        self.ag_btn = ctk.CTkButton(input_frame, text="发送", width=80,
+                                    font=("", 13), command=self._start_agent)
+        self.ag_btn.grid(row=0, column=1)
+
+        self.pages["agent"] = page
+
+    def _agent_chat_append(self, msg):
+        """向 agent 对话区追加消息"""
+        self.ag_chat.configure(state="normal")
+        self.ag_chat.insert("end", msg + "\n")
+        self.ag_chat.see("end")
+        self.ag_chat.configure(state="disabled")
+
+    def _start_agent(self):
+        goal = self.ag_input.get().strip()
+        if not goal:
+            return
+        if self.is_running:
+            return
+
+        self.ag_input.delete(0, "end")
+        self._agent_chat_append(f"👤 {goal}\n")
+        self.is_running = True
+        self.ag_btn.configure(state="disabled", text="运行中...")
+
+        threading.Thread(target=self._run_agent, args=(goal,), daemon=True).start()
+
+    def _run_agent(self, goal):
+        from agent import run_agent
+        def cb(msg):
+            self.after(0, self._agent_chat_append, msg)
+        try:
+            result = run_agent(goal, callback=cb)
+            self.after(0, self._agent_chat_append, f"\n{'='*40}")
+            self.after(0, self._agent_chat_append, f"📋 最终结果：\n{result}")
+        except Exception as e:
+            self.after(0, self._agent_chat_append, f"\n❌ 异常: {e}")
+        finally:
+            self.after(0, lambda: self.ag_btn.configure(state="normal", text="发送"))
+            self.is_running = False
 
 
 def main():
