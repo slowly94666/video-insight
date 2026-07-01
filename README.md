@@ -28,9 +28,8 @@ python install.py
 
 ### 3. 配置 API Key
 ```bash
-# 复制配置模板
 copy .env.example .env
-# 编辑 .env，填入你的 MiMo API Key
+# 编辑 .env，填入你的 API Key
 ```
 
 ### 4. 启动

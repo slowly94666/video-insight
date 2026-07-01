@@ -120,7 +120,7 @@ def main():
     env_file = Path(__file__).parent / ".env"
     if not env_file.exists():
         print("\n提示: 请创建 .env 文件并配置 API Key:")
-        print("  MIMO_API_KEY=your_key_here")
+        print("  API_KEY=your_key_here")
         print("  (复制 .env.example 并填入你的 key)")
 
 

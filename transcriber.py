@@ -115,7 +115,7 @@ def transcribe_mimo(audio_path: str, callback=None) -> str:
     """MiMo ASR 转录（大文件自动分段）"""
     api_key, api_base = get_mimo_config()
     if not api_key:
-        raise ValueError("未配置 MIMO_API_KEY，请在 .env 文件中设置")
+        raise ValueError("未配置 API_KEY，请在 .env 文件中设置")
 
     audio_path = str(audio_path)
     file_size = os.path.getsize(audio_path)

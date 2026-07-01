@@ -59,7 +59,7 @@ def clean_ascii(text):
 
 def get_mimo_config():
     """读取 MiMo API 配置"""
-    key = clean_ascii(os.environ.get("MIMO_API_KEY", ""))
+    key = clean_ascii(os.environ.get("API_KEY", ""))
     if key.startswith("tp-"):
         base = "https://token-plan-cn.xiaomimimo.com/v1"
     else:
