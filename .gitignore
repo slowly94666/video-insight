@@ -1,0 +1,22 @@
+# 依赖工具（由 install.py 自动下载）
+bin/
+
+# 运行时生成
+downloads/
+transcripts/
+analysis/
+
+# 配置
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
