@@ -115,7 +115,7 @@ def _build_download_tab():
         ui.label('📥 视频下载').classes('text-xl font-bold text-white mb-3')
 
         platform = ui.radio(
-            {k: f"{v['icon']} {v['name']}" for k, v in PLATFORMS.items()},
+            {'auto': '🔍 自动检测', **{k: f"{v['icon']} {v['name']}" for k, v in PLATFORMS.items()}},
             value='auto'
         ).classes('text-gray-300')
 
