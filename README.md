@@ -1,4 +1,4 @@
-# 视频Agent
+# 视频洞察 (video-insight)
 
 一站式视频下载 → 语音转录 → 文案分析工具。
 
@@ -15,8 +15,8 @@
 
 ### 1. 克隆项目
 ```bash
-git clone https://github.com/your-username/video-agent.git
-cd video-agent
+git clone https://github.com/slowly94666/video-insight.git
+cd video-insight
 ```
 
 ### 2. 安装依赖
@@ -38,10 +38,27 @@ python gui.py
 ```
 Windows 用户也可以双击 `setup.bat` 一键完成安装。
 
+## 完整依赖清单
+
+| 依赖 | 用途 | 安装方式 |
+|------|------|----------|
+| Python 3.9+ | 运行环境 | [python.org](https://www.python.org/) |
+| ffmpeg / ffprobe | 音频提取、视频合并 | `python install.py` 自动下载 |
+| yt-dlp | B站/Twitter/SOOP 下载 | `python install.py` 自动下载 |
+| requests | API 调用 | `pip install requests` |
+| customtkinter | GUI 界面 | `pip install customtkinter` |
+| patchright（可选）| 抖音下载（反检测浏览器）| `pip install patchright && patchright install chromium` |
+| playwright（可选）| 抖音下载备选方案 | `pip install playwright && playwright install chromium` |
+| openai-whisper（可选）| Whisper 本地转录 | `pip install openai-whisper` |
+
+> **抖音下载说明**：优先用 patchright（反检测更强），没有则用 playwright，都没有则尝试 DT-Scraper。三个都没有会报错。
+>
+> **Whisper 说明**：仅在选择 Whisper 引擎时需要，默认用 MiMo ASR（云端，无需额外安装）。
+
 ## 目录结构
 
 ```
-video-agent/
+video-insight/
 ├── gui.py              # 统一 GUI
 ├── config.py           # 配置管理
 ├── downloader.py       # 视频下载
@@ -57,19 +74,3 @@ video-agent/
 ├── transcripts/        # 转录文本
 └── analysis/           # 分析报告
 ```
-
-## 依赖
-
-- Python 3.9+
-- ffmpeg / ffprobe（install.py 自动下载）
-- yt-dlp（install.py 自动下载）
-- MiMo API Key（[获取地址](https://xiaomimimo.com)）
-
-## 平台说明
-
-| 平台 | 下载方式 | 备注 |
-|------|----------|------|
-| B站 | yt-dlp | 支持番剧/普通视频 |
-| 抖音 | Playwright/DT-Scraper | 需要安装 patchright |
-| Twitter/X | yt-dlp | 需要 cookies（可选） |
-| SOOP | yt-dlp + 代理 | 需要配置代理 |
