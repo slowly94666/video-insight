@@ -499,8 +499,9 @@ class VideoAgentApp(ctk.CTk):
             cb(f"  分析: {ANALYSIS_DIR}")
 
         except Exception as e:
-            cb(f"❌ 流程异常: {e}")
-            self.after(0, lambda: self.pl_status.configure(text=f"失败: {e}"))
+            err_msg = str(e)
+            cb(f"❌ 流程异常: {err_msg}")
+            self.after(0, lambda m=err_msg: self.pl_status.configure(text=f"失败: {m}"))
         finally:
             self.after(0, lambda: self.pl_btn.configure(state="normal", text="🚀 开始全流程"))
             self.is_running = False
