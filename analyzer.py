@@ -9,7 +9,7 @@ import json
 import requests
 from pathlib import Path
 from datetime import datetime
-from config import TA_DIR, get_mimo_config, ANALYSIS_DIR
+from config import get_mimo_config, ANALYSIS_DIR
 
 
 # === MiMo API 调用 ===
