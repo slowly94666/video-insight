@@ -1,10 +1,13 @@
+# === 运行必需 ===
 requests>=2.28
-customtkinter>=5.2
-nicegui>=1.4
+python-dotenv>=1.0
 
-# 可选：抖音下载引擎（二选一，都没有则走 Playwright 有头模式）
-# patchright  (推荐，反检测 Playwright)
-# playwright
+# === 抖音下载（必需，三选一） ===
+# 推荐 patchright（反检测最强），其次 playwright，都没有则尝试 DT-Scraper
+# 安装后需运行对应的浏览器安装命令（见 install.py）
+# patchright  # pip install patchright && patchright install chromium
+# playwright  # pip install playwright && playwright install chromium
 
-# 可选：Whisper 本地转录引擎
+# === 可选：Whisper 本地转录 ===
+# 仅在选择 Whisper 引擎时需要，默认用 SiliconFlow 云端 ASR
 # openai-whisper

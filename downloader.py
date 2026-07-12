@@ -6,8 +6,12 @@
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 from config import YTDLP, DOWNLOAD_DIR
+
+# Windows: 禁止 subprocess 弹出 CMD 窗口
+_CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 
 
 def detect_platform(url: str) -> str:
@@ -24,7 +28,7 @@ def detect_platform(url: str) -> str:
     return 'unknown'
 
 
-def download_bilibili(url: str, save_dir: str, callback=None) -> str:
+def download_bilibili(url: str, save_dir: str, callback=None, cancel_event=None) -> str:
     """下载B站视频"""
     cmd = [
         YTDLP,
@@ -34,10 +38,10 @@ def download_bilibili(url: str, save_dir: str, callback=None) -> str:
         "--no-check-certificate",
         url
     ]
-    return _run_ytdlp(cmd, save_dir, callback)
+    return _run_ytdlp(cmd, save_dir, callback, cancel_event)
 
 
-def download_douyin(url: str, save_dir: str, callback=None) -> str:
+def download_douyin(url: str, save_dir: str, callback=None, cancel_event=None) -> str:
     """下载抖音视频"""
     try:
         from lib_douyin import download_douyin as _dl, resolve_short_url
@@ -60,7 +64,7 @@ def download_douyin(url: str, save_dir: str, callback=None) -> str:
     return None
 
 
-def download_twitter(url: str, save_dir: str, callback=None) -> str:
+def download_twitter(url: str, save_dir: str, callback=None, cancel_event=None) -> str:
     """下载 Twitter/X 视频"""
     cmd = [
         YTDLP,
@@ -70,10 +74,10 @@ def download_twitter(url: str, save_dir: str, callback=None) -> str:
         "--no-check-certificate",
         url
     ]
-    return _run_ytdlp(cmd, save_dir, callback)
+    return _run_ytdlp(cmd, save_dir, callback, cancel_event)
 
 
-def download_soop(url: str, save_dir: str, callback=None) -> str:
+def download_soop(url: str, save_dir: str, callback=None, cancel_event=None) -> str:
     """下载 SOOP (AfreecaTV) 视频"""
     cmd = [
         YTDLP,
@@ -85,7 +89,7 @@ def download_soop(url: str, save_dir: str, callback=None) -> str:
         "--extractor-args", "afreecatv:all",
         url
     ]
-    return _run_ytdlp(cmd, save_dir, callback)
+    return _run_ytdlp(cmd, save_dir, callback, cancel_event)
 
 
 # === 统一入口 ===
@@ -98,7 +102,7 @@ DOWNLOADERS = {
 }
 
 
-def download(url: str, platform: str = None, save_dir: str = None, callback=None) -> str:
+def download(url: str, platform: str = None, save_dir: str = None, callback=None, cancel_event=None) -> str:
     """
     统一下载入口
 
@@ -107,6 +111,7 @@ def download(url: str, platform: str = None, save_dir: str = None, callback=None
         platform: 平台名（None=自动检测）
         save_dir: 保存目录（None=默认）
         callback: 进度回调 callback(msg: str)
+        cancel_event: threading.Event，设为 set 时取消下载
 
     Returns:
         下载的文件路径，失败返回 None
@@ -126,13 +131,13 @@ def download(url: str, platform: str = None, save_dir: str = None, callback=None
     if callback:
         callback(f"平台: {platform} | 保存到: {save_dir}")
 
-    return DOWNLOADERS[platform](url, save_dir, callback)
+    return DOWNLOADERS[platform](url, save_dir, callback, cancel_event)
 
 
 # === 工具函数 ===
 
-def _run_ytdlp(cmd: list, save_dir: str, callback=None) -> str:
-    """运行 yt-dlp 命令并跟踪输出"""
+def _run_ytdlp(cmd: list, save_dir: str, callback=None, cancel_event=None) -> str:
+    """运行 yt-dlp 命令并跟踪输出，支持取消"""
     try:
         proc = subprocess.Popen(
             cmd,
@@ -140,12 +145,22 @@ def _run_ytdlp(cmd: list, save_dir: str, callback=None) -> str:
             stderr=subprocess.STDOUT,
             text=True,
             encoding='utf-8',
-            errors='ignore'
+            errors='ignore',
+            creationflags=_CREATE_NO_WINDOW
         )
         for line in proc.stdout:
             line = line.strip()
             if line and callback:
                 callback(line)
+            if cancel_event and cancel_event.is_set():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                if callback:
+                    callback("⏹ 已取消下载")
+                return None
         proc.wait()
 
         if proc.returncode == 0:

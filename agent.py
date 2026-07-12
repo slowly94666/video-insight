@@ -7,7 +7,7 @@ import os
 import json
 import requests
 from pathlib import Path
-from config import get_mimo_config, DOWNLOAD_DIR, TRANSCRIPT_DIR, ANALYSIS_DIR
+from config import get_llm_config, DOWNLOAD_DIR, TRANSCRIPT_DIR, ANALYSIS_DIR
 
 # ═══════════════════════════════════════════
 # 工具注册
@@ -40,12 +40,12 @@ def _tool_download(url: str, platform: str = "auto") -> str:
     return "下载失败"
 
 
-@tool("transcribe", "转录视频为文字", "video_path: 视频文件路径, engine: 转录引擎（mimo/whisper，默认 mimo）")
-def _tool_transcribe(video_path: str, engine: str = "mimo") -> str:
+@tool("transcribe", "转录视频为文字", "video_path: 视频文件路径, engine: 转录引擎（gemini/mimo/whisper，默认 gemini）")
+def _tool_transcribe(video_path: str, engine: str = "gemini") -> str:
     from transcriber import transcribe
     def cb(msg):
         pass
-    text = transcribe(video_path, engine=engine, callback=cb)
+    text, _ = transcribe(video_path, engine=engine, callback=cb)
     return f"转录完成，共 {len(text)} 字。前200字预览：\n{text[:200]}"
 
 
@@ -138,15 +138,15 @@ def _build_system_prompt():
 
 
 def chat(messages: list) -> str:
-    """调用 MiMo API 对话"""
-    api_key, api_base = get_mimo_config()
+    """调用 LLM API 对话"""
+    api_key, api_base, model = get_llm_config()
     url = f"{api_base}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
     data = {
-        "model": "mimo-v2.5-pro",
+        "model": model,
         "messages": messages,
         "max_tokens": 1500,
         "temperature": 0.3,
