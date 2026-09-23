@@ -5,6 +5,8 @@ bin/
 downloads/
 transcripts/
 analysis/
+logs/
+*.log
 
 # 配置
 .env

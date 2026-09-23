@@ -8,7 +8,8 @@
 启动视频Agent.pyw          ← 入口（Windows 双击启动）
 │
 ├── gui_tk.py              ← GUI 层（tkinter 单页布局）
-│   ├── 6 个功能按钮：全流程 / 仅下载 / 转录文件 / 分析文本 / 直播源 / 停止
+│   ├── 7 个功能按钮：全流程 / 仅下载 / 转录文件 / 分析文本 / 视频源 / 直播源 / 停止
+│   ├── 转录 / 分析面板各带「导入Obsidian」按钮
 │   ├── 5 种报告格式：完整 / 精简 / 核查 / 批注 / 一图
 │   └── 双栏输出：左=转录文本，右=分析报告
 │
@@ -24,6 +25,7 @@
 │   └── 4 引擎：SiliconFlow SenseVoice / Groq Whisper / Gemini / 本地 Whisper
 │
 ├── analyzer.py            ← LLM 分析层（DeepSeek / OpenAI / 自定义）
+├── obsidian_import.py     ← Obsidian 导入（一键写入 Obsidian 库 + obsidian:// 打开）
 ├── agent.py               ← ReAct Agent 层（CLI 自主规划模式）
 ├── live.py                ← 直播源提取（抖音 / 快手 / B站）
 │
@@ -32,7 +34,7 @@
 ├── setup.bat              ← Windows 一键安装脚本
 │
 ├── bin/                   ← 二进制工具（yt-dlp, ffmpeg, ffprobe — install.py 下载）
-├── downloads/             ← 下载的视频
+├── downloads/             ← 默认下载目录（.env 的 DOWNLOAD_DIR 可覆盖）
 ├── transcripts/           ← 转录文本（.txt）
 └── analysis/              ← 分析报告（.md）
 ```
@@ -43,6 +45,7 @@
 URL 输入 → detect_platform() → download() → .mp4 文件
   → extract_audio() → transcribe() → 文本
   → analyze_unified() → parse_sections() → 结构化报告
+  → 点击「导入Obsidian」→ 写入 Obsidian 库指定目录 → Obsidian 中打开
 ```
 
 ## 新机部署
@@ -81,7 +84,9 @@ python gui_tk.py
 | 📥 下载 | B站 / 抖音 / Twitter / SOOP | 粘贴链接，自动检测平台 |
 | 🎙 转录 | SiliconFlow / Groq / Gemini / Whisper | 4 引擎可选，GUI 内切换 |
 | 🧠 分析 | DeepSeek / OpenAI / 自定义 | 5 种报告格式切换 |
+| 🎬 视频源 | 抖音短视频 / B站视频 | 提取视频直链，复制链接或 PotPlayer 播放 |
 | 📺 直播源 | 抖音 / 快手 / B站 | 提取直播流地址，一键 PotPlayer 播放 |
+| 📥 导入 Obsidian | 本地 Obsidian 库 | 转录/分析结果一键写入库内并自动打开 |
 | ⚡ 全流程 | 下载 → 转录 → 分析 | 一键完成 |
 
 ## 环境变量（.env）
@@ -96,6 +101,13 @@ SILICONFLOW_API_KEY=sk-xxx   # 首选，国内直连
 GEMINI_API_KEY=xxx           # 备选
 GROQ_API_KEY=xxx             # 备选（需代理）
 API_KEY=tp-xxx               # MiMo（旧，已过期）
+
+# 下载目录（默认项目内 downloads/，也可用 GUI 的「📂 下载目录」临时切换）
+# DOWNLOAD_DIR=D:\Video
+
+# Obsidian 导入（可选，不填则自动探测 ~/Documents/Obsidian 等常见位置）
+# OBSIDIAN_VAULT=%USERPROFILE%\Documents\Obsidian\MyVault
+# OBSIDIAN_IMPORT_SUBDIR=视频洞察
 ```
 
 ## 依赖清单
