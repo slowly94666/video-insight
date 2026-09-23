@@ -278,6 +278,64 @@ def analyze_unified(text: str, source_name: str = "未知", callback=None) -> tu
     return raw, str(out_file)
 
 
+CONTENT_PROMPT = """你是视频内容的「详细内容整理师」。用户会给你一段视频转录文本，你的任务是把视频里讲到的内容完整、详细地整理出来，而不是做分析、评价或概括。
+
+硬性要求：
+1. 逐条保留转录中所有具体信息：操作步骤、时间/温度/数量/价格、人名/平台名/专有名词、因果解释、例子、细节，一律不要省略或缩写。
+2. 按视频实际内容类型组织结构：
+   - 教程/学习/操作类：输出「分步指南」+「知识点清单」，步骤要能照着直接做；
+   - 科普/知识类：输出逐条「知识点」，每条含定义、原理、例子；
+   - 观点/讨论/辩论类：输出各方观点、各自的具体论据和例子；
+   - 故事/人物/资讯类：输出完整脉络（起因-经过-结果）、关键人物和事件细节。
+3. 禁止写成几条概括性要点；不要写「视频讲述了……」「作者认为……」这类分析口吻，直接输出内容本身。
+4. 转录中的口语、重复、客套话可以去掉，但事实信息必须保留。
+
+直接输出整理后的 Markdown 正文，不要加标题包裹、不要用 JSON、不要输出其他内容。"""
+
+
+def extract_content(text: str, source_name: str = "未知", callback=None) -> tuple[str, str]:
+    """无遗漏内容整理：独立 LLM 调用，返回 (详细内容 Markdown, 保存路径)"""
+    if callback:
+        callback("📖 正在整理详细内容...")
+
+    api_key, api_base, model = get_llm_config()
+    if not api_key:
+        raise ValueError("未配置 API Key")
+
+    url = f"{api_base}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    data = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": CONTENT_PROMPT},
+            {"role": "user", "content": text[:12000]}
+        ],
+        "max_tokens": 4000,
+        "temperature": 0.4
+    }
+
+    resp = requests.post(url, json=data, headers=headers, timeout=120)
+    if resp.status_code != 200:
+        raise RuntimeError(f"LLM API HTTP {resp.status_code}: {resp.text[:300]}")
+
+    raw = resp.json()["choices"][0]["message"]["content"].strip()
+
+    # 保存详细内容
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = Path(source_name).stem if source_name else "分析"
+    out_file = ANALYSIS_DIR / f"{safe_name}_content_{ts}.md"
+    with open(out_file, 'w', encoding='utf-8') as f:
+        f.write(raw)
+
+    if callback:
+        callback(f"📖 详细内容已保存: {out_file.name}")
+
+    return raw, str(out_file)
+
+
 def parse_sections(raw: str) -> dict:
     """解析统一分析的节段文本，返回 {section_name: content}"""
     import re

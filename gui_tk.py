@@ -12,11 +12,14 @@ from datetime import datetime
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 from config import (DOWNLOAD_DIR, TRANSCRIPT_DIR, ANALYSIS_DIR,
-                    PLATFORMS, ASR_ENGINES, ANALYSIS_MODULES)
+                    PLATFORMS, ASR_ENGINES, ANALYSIS_MODULES,
+                    OBSIDIAN_VAULT_DIR, OBSIDIAN_IMPORT_DIR)
+from obsidian_import import (import_to_obsidian, compose_transcript_note,
+                             compose_analysis_note, _safe_stem)
 from downloader import download, detect_platform
 from transcriber import transcribe
-from analyzer import analyze_unified, parse_sections
-from live import extract as live_extract, find_potplayer
+from analyzer import analyze_unified, parse_sections, extract_content
+from live import extract as live_extract, extract_video as live_extract_video, find_potplayer
 from theme import THEME
 from operation import OperationRunner, CancelledError
 
@@ -39,12 +42,18 @@ class VideoInsightApp:
         self.sections = {}
         self.live_urls = []
         self._save_dir = str(DOWNLOAD_DIR)
+        self._source_url = ""
+        self._source_name = ""
 
         # ── 操作运行器（取代手动 cancel_event + 按钮管理） ──
         self.runner = OperationRunner(ui_call=self._ui_call)
         self.runner.on_state_change(self._on_op_state_change)
 
         self.build_ui()
+        if OBSIDIAN_VAULT_DIR:
+            self._log(f"Obsidian 库: {OBSIDIAN_VAULT_DIR.name} -> {OBSIDIAN_IMPORT_DIR}")
+        else:
+            self._log("未检测到 Obsidian 库，可在 .env 设置 OBSIDIAN_VAULT")
 
     # ═══════════════════ 线程安全基础 ═══════════════════
 
@@ -52,8 +61,8 @@ class VideoInsightApp:
         """所有跨线程 UI 更新的唯一编组入口"""
         self.root.after(0, fn)
 
-    def _on_op_state_change(self, state):
-        """OperationRunner 状态变更 → 更新按钮"""
+    def _on_op_state_change(self, state, op=None):
+        """OperationRunner 状态变更 → 更新按钮 + 输出错误/取消提示"""
         from operation import OpState
         if state == OpState.RUNNING:
             for btn in self.action_buttons:
@@ -63,16 +72,59 @@ class VideoInsightApp:
             for btn in self.action_buttons:
                 btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
+            if state == OpState.ERROR and op is not None:
+                self._emit_error(
+                    f"❌ 操作失败: {op.error_type}: {op.error_message}")
+                self._append_error_log(op)
+                self._emit_warn("📄 详细错误已写入 logs/error.log")
+                self._emit_status("❌ 操作失败", "danger")
+            elif state == OpState.CANCELLED:
+                self._emit_warn("⏹ 已取消")
+                self._emit_status("⏹ 已取消", "warning")
 
-    def _emit_log(self, msg):
-        """线程安全的日志输出"""
+    def _emit_log(self, msg, tag=None):
+        """线程安全的日志输出（tag: err/warn/ok/info）"""
         ts = datetime.now().strftime("%H:%M:%S")
-        self._ui_call(lambda: self._log_impl(ts, msg))
+        self._ui_call(lambda: self._log_impl(ts, msg, tag))
 
-    def _log_impl(self, ts, msg):
+    def _log_impl(self, ts, msg, tag=None):
         """日志写入（必须主线程调用）"""
-        self.log_box.insert("end", f"[{ts}] {msg}\n")
+        self.log_box.insert("end", f"[{ts}] {msg}\n", tag or ())
         self.log_box.see("end")
+
+    def _emit_error(self, msg):
+        """错误日志（红色）"""
+        self._emit_log(msg, "err")
+
+    def _emit_warn(self, msg):
+        """警告日志（黄色）"""
+        self._emit_log(msg, "warn")
+
+    def _emit_ok(self, msg):
+        """成功日志（绿色）"""
+        self._emit_log(msg, "ok")
+
+    def _step_log(self, prefix):
+        """生成带步骤前缀的日志回调（给 download/transcribe/analyze 用）"""
+        def cb(msg):
+            self._emit_log(f"{prefix} {msg}")
+        return cb
+
+    def _append_error_log(self, op):
+        """把完整错误信息（含 traceback）追加写入 logs/error.log"""
+        try:
+            log_dir = Path(__file__).parent / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(log_dir / "error.log", "a", encoding="utf-8") as f:
+                f.write(f"\n[{ts}] 操作失败\n")
+                f.write(f"类型: {op.error_type}\n")
+                f.write(f"错误: {op.error_message}\n")
+                f.write("Traceback:\n")
+                f.write(op.traceback)
+                f.write("\n" + "-" * 60 + "\n")
+        except Exception as e:
+            self._emit_warn(f"⚠️ 写入错误日志失败: {e}")
 
     def _emit_flow(self, key, state):
         """线程安全的流程指示器更新"""
@@ -171,6 +223,11 @@ class VideoInsightApp:
                                   fg=T.text_primary, activebackground=T.bg_input)
         self.live_btn.pack(side="left", padx=(0, 4))
 
+        self.video_btn = tk.Button(btn_frame, text="🎬 视频源", **btn_cfg,
+                                   command=self.run_video_extract, bg=T.bg_card,
+                                   fg=T.text_primary, activebackground=T.bg_input)
+        self.video_btn.pack(side="left", padx=(0, 4))
+
         self.stop_btn = tk.Button(btn_frame, text="⏹ 停止",
                                   font=("Microsoft YaHei UI", 10),
                                   fg=T.danger, bg=T.bg_card, width=8,
@@ -179,7 +236,7 @@ class VideoInsightApp:
         self.stop_btn.pack(side="right")
 
         self.action_buttons = [self.pipeline_btn, self.dl_btn, self.tr_btn,
-                               self.an_btn, self.live_btn]
+                               self.an_btn, self.live_btn, self.video_btn]
 
         # ── 选项行 ──
         opt_frame = tk.Frame(self.root, bg=T.bg_primary)
@@ -274,6 +331,7 @@ class VideoInsightApp:
 
         rt = tk.Frame(right, bg=T.bg_card)
         rt.pack(fill="x", padx=4, pady=(4, 0))
+        self.rt = rt
         tk.Label(rt, text="🧠 分析报告", font=("Microsoft YaHei UI", 10, "bold"),
                  fg=T.text_primary, bg=T.bg_card).pack(side="left")
         tk.Button(rt, text="📂", font=("Microsoft YaHei UI", 8), width=3,
@@ -312,6 +370,12 @@ class VideoInsightApp:
                                insertbackground=T.text_secondary)
         self.log_box.pack(fill="both", expand=True)
         self.log_box.insert("end", "就绪，等待输入...\n")
+        # 日志分级颜色：错误红 / 警告黄 / 成功绿 / 普通灰
+        self.log_box.tag_configure("err", foreground=T.danger)
+        self.log_box.tag_configure("warn", foreground=T.warning)
+        self.log_box.tag_configure("ok", foreground=T.success)
+        self.log_box.tag_configure("info", foreground=T.text_secondary)
+        self._add_obsidian_buttons()
 
     # ═══════════════════ 工具方法 ═══════════════════
 
@@ -330,6 +394,7 @@ class VideoInsightApp:
             "active":    (T.flow_active_bg, T.flow_active_fg),
             "done":      (T.flow_done_bg, T.flow_done_fg),
             "cancelled": (T.flow_cancelled_bg, T.flow_cancelled_fg),
+            "error":     (T.flow_cancelled_bg, T.flow_cancelled_fg),
             "idle":      (T.flow_idle_bg, T.flow_idle_fg),
         }
         bg, fg = colors.get(state, (T.flow_idle_bg, T.flow_idle_fg))
@@ -392,7 +457,79 @@ class VideoInsightApp:
         """在资源管理器中打开目录"""
         os.startfile(str(dir_path))
 
+    # ═══════════════════ Obsidian 导入 ═══════════════════
+
+    def _add_obsidian_buttons(self):
+        """在转录/分析面板各加一个「导入Obsidian」按钮"""
+        T = THEME
+        for parent in (self.lt, self.rt):
+            tk.Button(parent, text="导入Obsidian", font=("Microsoft YaHei UI", 8),
+                      width=12, relief="flat", bd=1, bg=T.bg_input,
+                      fg=T.text_secondary,
+                      command=self._import_transcript if parent is self.lt
+                      else self._import_report
+                      ).pack(side="right", padx=(4, 0))
+
+    def _current_title(self):
+        """根据当前来源生成笔记标题（文件名/URL 末段）"""
+        name = self._source_name or self._source_url
+        return _safe_stem(name, fallback="视频") if name else "视频"
+
+    def _source_display(self):
+        """导入笔记里展示的来源：优先 URL，其次本地文件路径"""
+        return self._source_url or self._source_name or ""
+
+    def _import_transcript(self):
+        text = self.transcript_text.get("1.0", "end-1c").strip()
+        if not text:
+            messagebox.showwarning("无内容", "转录文本为空，请先完成转录")
+            return
+        title = self._current_title()
+        body = compose_transcript_note(title, text, source=self._source_display())
+        self._write_to_obsidian(body, title)
+
+    def _import_report(self):
+        text = self.analysis_text.get("1.0", "end-1c").strip()
+        if not text:
+            messagebox.showwarning("无内容", "分析报告为空，请先完成分析")
+            return
+        title = self._current_title()
+        sections = self.sections if self.sections else {"analysis": text}
+        body = compose_analysis_note(title, sections, source=self._source_display())
+        self._write_to_obsidian(body, title)
+
+    def _write_to_obsidian(self, body, title):
+        """写入 Obsidian 库并自动打开（主线程调用）"""
+        try:
+            path, uri = import_to_obsidian(title, body,
+                                           source=self._source_display())
+        except Exception as e:
+            self._emit_error(f"❌ 导入 Obsidian 失败: {e}")
+            messagebox.showerror("导入失败", str(e))
+            return
+        self._emit_ok(f"✅ 已导入 Obsidian: {path}")
+        self._emit_status("已导入 Obsidian", "success")
+        try:
+            os.startfile(uri)
+            self._log("已在 Obsidian 中打开")
+        except Exception:
+            self._log(f"已写入库，可手动打开: {uri}")
+
     # ═══════════════════ 报告渲染 ═══════════════════
+
+    def _extract_content_for_report(self, text, path, check):
+        """整理「详细内容」并写入 sections['content']；失败不中断分析"""
+        try:
+            content_md, content_path = extract_content(
+                text, source_name=path,
+                callback=self._step_log("[🧠分析]"))
+            check()
+            self.sections["content"] = content_md
+            self._emit_ok(f"📖 详细内容文件: {Path(content_path).name}")
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._emit_warn(f"⚠️ 详细内容整理失败（分析仍可用）: {e}")
 
     def _on_format_changed(self):
         if self.sections:
@@ -407,7 +544,12 @@ class VideoInsightApp:
             self.analysis_text.insert("end", text)
 
         if fmt == "full":
-            show(s.get("analysis", ""))
+            content = s.get("content", "").strip()
+            analysis = s.get("analysis", "")
+            if content:
+                show(f"## 📖 详细内容\n\n{content}\n\n---\n\n## 🧠 完整分析\n\n{analysis}")
+            else:
+                show(analysis)
         elif fmt == "brief":
             show(f"📋 {s.get('headline','')}\n\n---\n\n"
                  f"🔑 要点:\n{s.get('keypoints','')}\n\n{s.get('scores','')}")
@@ -443,6 +585,7 @@ class VideoInsightApp:
 
     def run_pipeline(self):
         url = self.url_entry.get().strip()
+        self._source_url = url
         if not url:
             self._log("⚠ 请输入视频链接")
             return
@@ -461,39 +604,66 @@ class VideoInsightApp:
         check()
         self._emit_flow("download", "active")
         self._emit_log("📥 [1/3] 下载中...")
-        platform = detect_platform(url)
-        path = download(url, platform=platform, save_dir=self._save_dir,
-                       callback=lambda m: self._emit_log(m),
-                       cancel_event=op.cancel_event)
-        check()
-        if not path:
-            raise RuntimeError("下载失败")
-        self._emit_log(f"✅ 下载完成: {Path(path).name}")
+        last_msg = [""]
+        try:
+            platform = detect_platform(url)
+            def dl_cb(m):
+                last_msg[0] = m
+                self._emit_log(f"[📥下载] {m}")
+            path = download(url, platform=platform, save_dir=self._save_dir,
+                           callback=dl_cb,
+                           cancel_event=op.cancel_event)
+            check()
+            if not path:
+                raise RuntimeError(f"下载失败: {last_msg[0] or '未返回文件路径'}")
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._emit_error(f"❌ [1/3 下载] 失败: {type(e).__name__}: {e}")
+            self._emit_flow("download", "error")
+            raise
+        self._emit_ok(f"✅ 下载完成: {Path(path).name}")
         self._emit_flow("download", "done")
 
+        self._source_name = path
         # [2/3] 转录
         check()
         self._emit_flow("transcribe", "active")
         self._emit_log("🎙 [2/3] 转录中...")
-        engine = self.engine_var.get()
-        text, ts_path = transcribe(path, engine=engine,
-                         callback=lambda m: self._emit_log(m))
-        check()
+        try:
+            engine = self.engine_var.get()
+            text, ts_path = transcribe(path, engine=engine,
+                             callback=self._step_log("[🎙转录]"))
+            check()
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._emit_error(f"❌ [2/3 转录] 失败: {type(e).__name__}: {e}")
+            self._emit_flow("transcribe", "error")
+            raise
         self._emit_transcript(text)
-        self._emit_log(f"✅ 转录完成: {len(text)} 字")
+        self._emit_ok(f"✅ 转录完成: {len(text)} 字")
         self._emit_flow("transcribe", "done")
 
         # [3/3] 分析
         check()
         self._emit_flow("analyze", "active")
         self._emit_log("🧠 [3/3] 分析中...")
-        raw, an_path = analyze_unified(text, source_name=path,
-                             callback=lambda m: self._emit_log(m))
-        check()
+        try:
+            raw, an_path = analyze_unified(text, source_name=path,
+                                 callback=self._step_log("[🧠分析]"))
+            check()
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._emit_error(f"❌ [3/3 分析] 失败: {type(e).__name__}: {e}")
+            self._emit_flow("analyze", "error")
+            raise
         self.raw_result = raw
         self.sections = parse_sections(raw)
+        self._extract_content_for_report(text, path, check)
         self._emit_report()
-        self._emit_log("✅ 全流程完成")
+        self._emit_ok("✅ 全流程完成")
         self._emit_flow("analyze", "done")
         self._emit_status("✅ 全流程完成", "success")
         self._ui_call(lambda: self.transcript_path_label.configure(text=ts_path))
@@ -516,14 +686,21 @@ class VideoInsightApp:
     def _download_thread(self, op, check, url):
         check()
         self._emit_flow("download", "active")
-        platform = detect_platform(url)
-        path = download(url, platform=platform, save_dir=self._save_dir,
-                       callback=lambda m: self._emit_log(m),
-                       cancel_event=op.cancel_event)
-        check()
-        if not path:
-            raise RuntimeError("下载失败")
-        self._emit_log(f"✅ {Path(path).name}")
+        try:
+            platform = detect_platform(url)
+            path = download(url, platform=platform, save_dir=self._save_dir,
+                           callback=self._step_log("[📥下载]"),
+                           cancel_event=op.cancel_event)
+            check()
+            if not path:
+                raise RuntimeError("下载失败: 未返回文件路径")
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._emit_error(f"❌ [下载] 失败: {type(e).__name__}: {e}")
+            self._emit_flow("download", "error")
+            raise
+        self._emit_ok(f"✅ {Path(path).name}")
         self._emit_flow("download", "done")
         self._emit_status(f"✅ {Path(path).name}", "success")
 
@@ -536,6 +713,7 @@ class VideoInsightApp:
                        ("所有", "*.*")])
         if not path:
             return
+        self._source_name = path
         if not self.runner.start(self._transcribe_thread, path):
             self._log("⚠ 请等待当前操作完成")
             return
@@ -547,11 +725,18 @@ class VideoInsightApp:
     def _transcribe_thread(self, op, check, path):
         check()
         self._emit_flow("transcribe", "active")
-        text, saved_path = transcribe(path, engine=self.engine_var.get(),
-                         callback=lambda m: self._emit_log(m))
-        check()
+        try:
+            text, saved_path = transcribe(path, engine=self.engine_var.get(),
+                             callback=self._step_log("[🎙转录]"))
+            check()
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._emit_error(f"❌ [转录] 失败: {type(e).__name__}: {e}")
+            self._emit_flow("transcribe", "error")
+            raise
         self._emit_transcript(text)
-        self._emit_log(f"✅ {len(text)} 字")
+        self._emit_ok(f"✅ {len(text)} 字")
         self._emit_flow("transcribe", "done")
         self._emit_status(f"✅ {saved_path}", "success")
         self._ui_call(lambda: self.transcript_path_label.configure(text=saved_path))
@@ -564,6 +749,7 @@ class VideoInsightApp:
             filetypes=[("文本", "*.txt *.md"), ("所有", "*.*")])
         if not path:
             return
+        self._source_name = path
         try:
             with open(path, "r", encoding="utf-8") as f:
                 text = f.read()
@@ -585,13 +771,21 @@ class VideoInsightApp:
     def _analyze_thread(self, op, check, text, path):
         check()
         self._emit_flow("analyze", "active")
-        raw, saved_path = analyze_unified(text, source_name=path,
-                             callback=lambda m: self._emit_log(m))
-        check()
+        try:
+            raw, saved_path = analyze_unified(text, source_name=path,
+                                 callback=self._step_log("[🧠分析]"))
+            check()
+        except CancelledError:
+            raise
+        except Exception as e:
+            self._emit_error(f"❌ [分析] 失败: {type(e).__name__}: {e}")
+            self._emit_flow("analyze", "error")
+            raise
         self.raw_result = raw
         self.sections = parse_sections(raw)
+        self._extract_content_for_report(text, path, check)
         self._emit_report()
-        self._emit_log("✅ 分析完成")
+        self._emit_ok("✅ 分析完成")
         self._emit_flow("analyze", "done")
         self._emit_status(f"✅ {saved_path}", "success")
         self._ui_call(lambda: self.analysis_path_label.configure(text=saved_path))
@@ -611,7 +805,7 @@ class VideoInsightApp:
         self._log(f"📺 提取: {url[:100]}")
 
     def _live_thread(self, op, check, url):
-        results = live_extract(url)
+        results = live_extract(url, callback=lambda m: self._emit_log(m))
         if not results:
             raise RuntimeError("未提取到直播源")
 
@@ -622,6 +816,40 @@ class VideoInsightApp:
         self._emit_transcript("\n".join(lines))
 
         # 显示直播源操作栏
+        self._ui_call(lambda: self.live_bar.pack(
+            fill="x", pady=(4, 0), after=self.lt))
+        self._ui_call(lambda: self.live_copy_btn.pack(side="left", padx=(0, 4)))
+        pp = find_potplayer()
+        if pp:
+            self._ui_call(lambda: self.live_play_btn.pack(side="left"))
+        else:
+            self._ui_call(lambda: self.live_play_btn.pack_forget())
+        self._emit_log(f"✅ {len(results)} 个源" + (" ▶ 可播放" if pp else ""))
+        self._emit_status(f"✅ {len(results)} 个源，可复制/播放", "success")
+
+    # ── 视频源 ──
+
+    def run_video_extract(self):
+        url = self.url_entry.get().strip()
+        if not url:
+            self._log("? 请输入链接")
+            return
+        if not self.runner.start(self._video_thread, url):
+            self._log("? 请等待当前操作完成")
+            return
+        self._emit_status("? 提取中...", "accent")
+        self._log(f"? 提取视频源: {url[:100]}")
+
+    def _video_thread(self, op, check, url):
+        results = live_extract_video(url, callback=lambda m: self._emit_log(m))
+        check()
+        if not results:
+            raise RuntimeError("未提取到视频源")
+        self.live_urls = results
+        lines = [f"=== 视频源 ({len(results)} 个) ===\n"]
+        for i, r in enumerate(results):
+            lines.append(f"{i+1}. {r.get('quality','?')}: {r.get('url','')}")
+        self._emit_transcript("\n".join(lines))
         self._ui_call(lambda: self.live_bar.pack(
             fill="x", pady=(4, 0), after=self.lt))
         self._ui_call(lambda: self.live_copy_btn.pack(side="left", padx=(0, 4)))

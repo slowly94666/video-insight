@@ -10,29 +10,6 @@ from pathlib import Path
 AGENT_DIR = Path(__file__).parent
 BIN_DIR = AGENT_DIR / "bin"
 
-# 输出目录
-DOWNLOAD_DIR = AGENT_DIR / "downloads"
-TRANSCRIPT_DIR = AGENT_DIR / "transcripts"
-ANALYSIS_DIR = AGENT_DIR / "analysis"
-
-for d in [DOWNLOAD_DIR, TRANSCRIPT_DIR, ANALYSIS_DIR]:
-    d.mkdir(parents=True, exist_ok=True)
-
-# === 工具路径 ===
-def _find_bin(name):
-    """在 bin/ 目录或系统 PATH 中查找可执行文件"""
-    local = BIN_DIR / name
-    if local.exists():
-        return str(local)
-    # fallback: 系统 PATH
-    import shutil
-    found = shutil.which(name.replace(".exe", ""))
-    return found or str(local)
-
-YTDLP = _find_bin("yt-dlp.exe")
-FFMPEG = _find_bin("ffmpeg.exe")
-FFPROBE = _find_bin("ffprobe.exe")
-
 # === .env 配置 ===
 def _load_env():
     """从 .env 文件加载环境变量（不覆盖已有的）"""
@@ -49,7 +26,83 @@ def _load_env():
             if key and key not in os.environ:
                 os.environ[key] = val
 
+# 先加载 .env，后面的路径 / 提供商配置才能被 .env 覆盖
 _load_env()
+
+# 输出目录
+# 下载目录默认在项目内 downloads/，可用 .env 的 DOWNLOAD_DIR 覆盖（相对路径按项目根解析）
+_download_env = os.environ.get("DOWNLOAD_DIR", "").strip().strip('"')
+if _download_env:
+    DOWNLOAD_DIR = Path(_download_env)
+    if not DOWNLOAD_DIR.is_absolute():
+        DOWNLOAD_DIR = AGENT_DIR / DOWNLOAD_DIR
+else:
+    DOWNLOAD_DIR = AGENT_DIR / "downloads"
+TRANSCRIPT_DIR = AGENT_DIR / "transcripts"
+ANALYSIS_DIR = AGENT_DIR / "analysis"
+
+for d in [DOWNLOAD_DIR, TRANSCRIPT_DIR, ANALYSIS_DIR]:
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # 外置盘未挂载等情况下回退项目内 downloads/，避免启动即崩溃
+        if d == DOWNLOAD_DIR:
+            DOWNLOAD_DIR = AGENT_DIR / "downloads"
+            DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# === 工具路径 ===
+def _find_bin(name):
+    """在 bin/ 目录或系统 PATH 中查找可执行文件"""
+    local = BIN_DIR / name
+    if local.exists():
+        return str(local)
+    # fallback: 系统 PATH
+    import shutil
+    found = shutil.which(name.replace(".exe", ""))
+    return found or str(local)
+
+YTDLP = _find_bin("yt-dlp.exe")
+FFMPEG = _find_bin("ffmpeg.exe")
+FFPROBE = _find_bin("ffprobe.exe")
+
+# === Obsidian 集成 ===
+def _find_vault_in(root):
+    """在指定目录里找库：目录自身带 .obsidian，或它的一级子目录带 .obsidian"""
+    try:
+        if not root.is_dir():
+            return None
+        if (root / ".obsidian").is_dir():
+            return root
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and (child / ".obsidian").is_dir():
+                return child
+    except OSError:
+        return None
+    return None
+
+def _detect_obsidian_vault():
+    """自动探测 Obsidian 库目录：优先 .env 的 OBSIDIAN_VAULT，其次常见位置"""
+    env_path = os.environ.get("OBSIDIAN_VAULT", "").strip().strip('"')
+    candidates = [
+        Path(env_path) if env_path else None,
+        Path.home() / "Documents" / "Obsidian",
+        Path.home() / "Documents" / "obsidian",
+    ]
+    for c in candidates:
+        if c is None:
+            continue
+        found = _find_vault_in(c)
+        if found:
+            return found
+    return None
+
+# Obsidian 库目录（None 表示未检测到，导入按钮会提示配置）
+OBSIDIAN_VAULT_DIR = _detect_obsidian_vault()
+# 导入子目录（相对库根目录，可用 .env 的 OBSIDIAN_IMPORT_SUBDIR 覆盖）
+OBSIDIAN_IMPORT_SUBDIR = os.environ.get(
+    "OBSIDIAN_IMPORT_SUBDIR", "视频洞察").strip().strip('"')
+OBSIDIAN_IMPORT_DIR = (OBSIDIAN_VAULT_DIR / OBSIDIAN_IMPORT_SUBDIR) \
+    if OBSIDIAN_VAULT_DIR else None
 
 def clean_ascii(text):
     """过滤非 ASCII 字符"""

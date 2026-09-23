@@ -304,9 +304,16 @@ def transcribe_groq(audio_path: str, callback=None) -> str:
     return "\n".join(texts)
 
 
-# === SiliconFlow ASR（SenseVoice，国内直连） ===
+# === SiliconFlow ASR（国内直连，多模型自动切换） ===
 
 SF_CHUNK_MAX_BYTES = 20 * 1024 * 1024  # 20MB
+
+# 免费 ASR 模型列表（按优先级排列，转录失败时自动切换下一个）
+SILICONFLOW_MODELS = [
+    "FunAudioLLM/SenseVoiceSmall",          # 默认：中文好，带标点
+    "XingChenAGI/XingChenASR-V3.2-Ultra",    # 备用 1
+    "TeleAI/TeleSpeechASR",                  # 备用 2
+]
 
 
 def _sf_transcribe_single(audio_path: str, api_key: str, model: str) -> str:
@@ -325,19 +332,41 @@ def _sf_transcribe_single(audio_path: str, api_key: str, model: str) -> str:
     return result["text"].strip()
 
 
+def _sf_transcribe_with_failover(audio_path: str, api_key: str, model_index: int,
+                                 callback=None) -> tuple[str, int]:
+    """按模型列表依次尝试转录，失败自动切换下一个模型。
+
+    返回 (转录文本, 本次成功使用的模型序号)；全部失败则抛出异常。
+    model_index 用于大文件分段时记住当前可用模型，避免每段都从头试。
+    """
+    last_err = None
+    for i in range(model_index, len(SILICONFLOW_MODELS)):
+        model = SILICONFLOW_MODELS[i]
+        try:
+            if callback:
+                callback(f"SiliconFlow ({model.split('/')[-1]}) 转录中...")
+            text = _sf_transcribe_single(audio_path, api_key, model)
+            return text, i
+        except Exception as e:
+            last_err = e
+            if callback:
+                callback(f"⚠️ {model.split('/')[-1]} 失败，切换下一个...")
+    raise RuntimeError(f"SiliconFlow 全部模型转录失败，最后错误: {last_err}")
+
+
 def transcribe_siliconflow(audio_path: str, callback=None) -> str:
-    """SiliconFlow ASR 转录（大文件自动分段）"""
-    api_key, model = get_siliconflow_asr_config()
+    """SiliconFlow ASR 转录（大文件自动分段，多模型失败自动切换）"""
+    api_key, _ = get_siliconflow_asr_config()
     if not api_key:
         raise ValueError("未配置 SILICONFLOW_API_KEY，请在 .env 文件中设置")
 
     audio_path = str(audio_path)
     file_size = os.path.getsize(audio_path)
+    # 当前可用模型序号：单文件直接从头试；分段时失败一次后记住新模型
+    model_index = 0
 
     if file_size <= SF_CHUNK_MAX_BYTES:
-        if callback:
-            callback(f"SiliconFlow ({model.split('/')[-1]}) 转录中...")
-        text = _sf_transcribe_single(audio_path, api_key, model)
+        text, _ = _sf_transcribe_with_failover(audio_path, api_key, model_index, callback)
         if callback:
             callback("✓ 转录完成")
         return text
@@ -356,7 +385,7 @@ def transcribe_siliconflow(audio_path: str, callback=None) -> str:
     for i, chunk in enumerate(chunks):
         if callback:
             callback(f"  转录第 {i + 1}/{len(chunks)} 段...")
-        t = _sf_transcribe_single(chunk, api_key, model)
+        t, model_index = _sf_transcribe_with_failover(chunk, api_key, model_index, callback)
         texts.append(t)
         try:
             os.remove(chunk)

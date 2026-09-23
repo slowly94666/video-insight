@@ -10,6 +10,7 @@ Video Insight — 操作抽象层
 """
 
 import threading
+import traceback
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -33,6 +34,8 @@ class Operation:
     cancel_event: threading.Event
     state: OpState = OpState.RUNNING
     error_message: str = ""
+    error_type: str = ""
+    traceback: str = ""
 
 
 class OperationRunner:
@@ -70,7 +73,11 @@ class OperationRunner:
     # ── 公共接口 ──
 
     def on_state_change(self, callback):
-        """注册操作状态变更回调（在主线程执行）"""
+        """注册操作状态变更回调（在主线程执行）。
+
+        回调签名：callback(state, op)，op 为当前 Operation，
+        失败时可用 op.error_message / op.error_type / op.traceback 取详情。
+        """
         self._on_state_change = callback
 
     @property
@@ -115,10 +122,12 @@ class OperationRunner:
         except Exception as e:
             op.state = OpState.ERROR
             op.error_message = str(e)
+            op.error_type = type(e).__name__
+            op.traceback = traceback.format_exc()
         finally:
             self._emit_state(op.state)
 
     def _emit_state(self, state):
         """编组到主线程通知状态变更"""
         if self._on_state_change is not None:
-            self._ui_call(lambda s=state: self._on_state_change(s))
+            self._ui_call(lambda s=state, op=self._current: self._on_state_change(s, op))
